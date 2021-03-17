@@ -1,25 +1,28 @@
-import discord
+from discord.ext import commands, tasks
 import os
 import requests
 import json
 import random
+import time
 from replit import db
 from keep_alive import keep_alive
 
-client = discord.Client()
+client = commands.AutoShardedBot(command_prefix = "$")
 
-sad_words = ["sad", "depressed", "unhappy", "miserable", "down", "down bad", "feels bad"]
+def update_todo(todo):
+  if "todolist" in db.keys():
+    todolist = db["todolist"]
+    todolist.append(todo)
+    db["todolist"] = todolist
+  else:
+    db["todolist"] = [todo]
 
-starter_encouragements = [
-  "Cheer up!",
-  "Hang in there",
-  "You are a great person / bot!",
-  "Pepe Le Pew"
-]
 
-if "responding" not in db.keys():
-  db["responding"] = True
-
+def delete_todo(index):
+  todolist = db["todolist"]
+  if len(todolist) > index:
+    del todolist[index]
+    db["todolist"] = todolist
 
 def get_quote():
   response =  requests.get("https://zenquotes.io/api/random")
@@ -27,21 +30,35 @@ def get_quote():
   quote = json_data[0]['q'] + " -" + json_data[0]['a']
   return quote
 
-def update_encouragements(encouraging_msg):
-  if "encouragements" in db.keys():
-    encouragements = db["encouragements"]
-    encouragements.append(encouraging_msg)
-    db["encouragements"] = encouragements
-  else:
-    db["encouragements"] = [encouraging_msg]
+
+@tasks.loop(seconds=86400, reconnect=True)
+async def manage_time():
+	offset = 30900 
+	current_time = (time.time()+offset)%86400
+
+	if 28500 > current_time or current_time > 29000:
+		difference_to_8 = 28800 - current_time
+		if difference_to_8 < 0:
+			difference_to_8 = (86_400 - current_time) + 28800
+		manage_time.change_interval(seconds=difference_to_8)
+	else:
+		manage_time.change_interval(seconds=86400)
+		
+	channel = await client.fetch_channel(821882414099857418)
+  # todolist = []
+	if "todolist" in db.keys():
+		todolist = db["todolist"]
+		await channel.send("To-Do List: ")
+		for i in range(len(todolist)):
+			await channel.send(f"{i+1}) {todolist[i]}")
+	else:
+		await channel.send("List Empty!")
 
 
-def delete_encouragement(index):
-  encouragements = db["encouragements"]
-  if len(encouragements) > index:
-    del encouragements[index]
-    db["encouragements"] = encouragements
-
+	
+@client.command()
+async def motivate(ctx):
+	await ctx.send(get_quote())
 
 @client.event 
 async def on_ready():
@@ -52,49 +69,37 @@ async def on_ready():
 async def on_message(message):
   if message.author == client.user: 
     return
-
+	
+  await client.process_commands(message)
   msg = message.content
 
   if msg.startswith('$motivate'):
     quote = get_quote()
     await message.channel.send(quote)
 
-  if db["responding"]:
-    options = starter_encouragements
-    if "encouragements" in db.keys():
-      options = options + db["encouragements"]
+  if msg.startswith('$add'):
+    todo = msg.split("$add ", 1)[1]
+    update_todo(todo)
+    await message.channel.send("To-do list updated!")
 
-    if any(word in msg for word in sad_words):
-      await message.channel.send(random.choice(options))
+  if msg.startswith("$remove"):
+    todolist = []
+    if "todolist" in db.keys():
+      index = int(msg.split("$remove ", 1)[1])
+      delete_todo(index)
+      todolist = db["todolist"]
+    await message.channel.send(todolist)
 
-  if msg.startswith('$new'):
-    encouraging_msg = msg.split("$new ", 1)[1]
-    update_encouragements(encouraging_msg)
-    await message.channel.send("Encouraging message list updated!")
-
-  if msg.startswith("$del"):
-    encouragements = []
-    if "encouragements" in db.keys():
-      index = int(msg.split("$del", 1)[1])
-      delete_encouragement(index)
-      encouragements = db["encouragements"]
-    await message.channel.send(encouragements)
-
-  if msg.startswith("$showlist"):
-    encouragements = []
-    if "encouragements" in db.keys():
-      encouragements = db["encouragements"]
-    await message.channel.send(encouragements)
-
-  if msg.startswith("$responding"):
-    value = msg.split("$responding ", 1)[1]
-
-    if value.lower() == "true":
-      db["responding"] = True
-      await message.channel.send("Responding is on!")
+  if msg.startswith("$list"):
+    todolist = []
+    if "todolist" in db.keys():
+      todolist = db["todolist"]
+      await message.channel.send("To-Do List: ")
+      for i in range(len(todolist)):
+        await message.channel.send(f"{i+1}) {todolist[i]}")
     else:
-      db["responding"] = False
-      await message.channel.send("Responding is off!")
+      await message.channel.send("List Empty!")
 
 keep_alive()
+manage_time.start()
 client.run(os.getenv('TOKEN'))
